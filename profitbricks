@@ -1,0 +1,249 @@
+#!/bin/bash
+#
+# External STONITH module for ProfitBricks API
+
+
+#trap 'rm -f "$outf"' 0
+#outf=`mktemp` || {
+#       ha_log.sh err 'mktemp failed'
+#       exit 1
+#}
+
+# Redirecting stderr and stdout
+#exec 1>> /var/log/mhm/ha-nfs.log 2>&1
+logfile=/var/log/mhm/ha-nfs.log
+
+#scriptname=$(basename $0)
+#lock="/var/tmp/mhm/${scriptname}.pid"
+
+#exec 200>$lock
+#flock -n 200 || exit 1
+
+#pid=$$
+#echo $pid 1>&200
+
+
+config_file=/etc/pb.conf
+
+# Source config file
+. $config_file
+
+
+hostname=`echo $2 | tr ',' ' '`
+
+
+get_server_id() {
+        if [ x = "x$hostname" ]
+        #if [ -z "$hostname" ]
+        then
+                echo "Usage: $0 action hostname" >> $logfile
+                echo "       Action can be: status, on, off, reset" >> $logfile
+                echo "       Hostname needs to be on config file ($config_file)" >> $logfile
+                exit 1
+        fi
+
+        serverid=${!hostname}
+        # /bin/sh (non-bash) version: serverid=$(eval echo \$$hostname)
+        echo "PB VM id is: $serverid" >> $logfile
+
+        #echo "\$1: " $1
+        #echo "server id: " $serverid
+        #echo "config file: " $config_file
+        #echo "hostname: " $hostname
+
+        if [ -z "$serverid" ]
+        then
+                echo "Error: The hostname was not recognized." >> $logfile
+                echo "       Have you configured $config_file correctly?" >> $logfile
+                exit 1
+        fi
+}
+
+pb_status() {
+        get_server_id
+
+        XML="
+        <soapenv:Envelope \
+          xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' \
+          xmlns:ws='http://ws.api.profitbricks.com/'>
+          <soapenv:Header/>
+          <soapenv:Body>
+            <ws:getServer>
+              <serverId>$serverid</serverId>
+            </ws:getServer>
+          </soapenv:Body>
+        </soapenv:Envelope>
+        "
+
+        api_query_output=`curl --data "$XML" --header \
+          "Authorization: Basic $ENCODED" --header \
+          'Content-Type: text/xml; charset=utf-8' $URL`
+
+        vm_on=`echo $api_query_output | egrep 'AVAILABLE.*RUNNING' | wc -l`
+        vm_off=`echo $api_query_output | egrep 'INACTIVE.*SHUTOFF' | wc -l`
+
+        if (( $vm_on == 1 )) ; then
+                echo "VM is on" >> $logfile
+                exit 0
+        elif (( $vm_off == 1 )) ; then
+                echo "VM is down" >> $logfile
+                exit 2
+        else
+                echo "Error: Something went wrong." >> $logfile
+                echo "Check if API is up, or for syntax errors on XML or query." >> $logfile
+                exit 1
+        fi
+}
+
+pb_on() {
+        get_server_id
+
+        XML="
+        <soapenv:Envelope \
+          xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' \
+          xmlns:ws='http://ws.api.profitbricks.com/'>
+        <soapenv:Header/>
+          <soapenv:Body>
+            <ws:startServer>
+              <serverId>$serverid</serverId>
+            </ws:startServer>
+          </soapenv:Body>
+        </soapenv:Envelope>
+        "
+
+        echo "Sending power on signal to $hostname..." >> $logfile
+        curl --data "$XML" --header "Authorization: Basic $ENCODED" \
+             --header 'Content-Type: text/xml; charset=utf-8' $URL
+
+        rc=$?
+        # TODO: we need to actually sleep and then try to get VM status and check
+
+        if [ $rc -eq 0 ]
+        then
+                return 0
+        else
+                echo "`date`: VM power on failed: `cat $outf`" >> $logfile
+                return 1
+        fi
+}
+
+pb_off() {
+        get_server_id
+
+        XML="
+        <soapenv:Envelope \
+          xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' \
+          xmlns:ws='http://ws.api.profitbricks.com/'>
+        <soapenv:Header />
+          <soapenv:Body>
+            <ws:stopServer>
+              <serverId>$serverid</serverId>
+            </ws:stopServer>
+          </soapenv:Body>
+        </soapenv:Envelope>
+        "
+
+        echo "Sending power off signal to $hostname..." >> $logfile
+        curl --data "$XML" --header "Authorization: Basic $ENCODED" \
+             --header 'Content-Type: text/xml; charset=utf-8' $URL
+
+        rc=$?
+        # TODO: we need to actually sleep and then try to get VM status and check
+
+        if [ $rc -eq 0 ]
+        then
+                return 0
+        else
+                echo "`date`: VM power off failed: `cat $outf`" >> $logfile
+                return 1
+        fi
+
+}
+
+pb_reset() {
+        get_server_id
+
+        XML="
+        <soapenv:Envelope \
+          xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' \
+          xmlns:ws='http://ws.api.profitbricks.com/'>               \
+          <soapenv:Header />           \
+          <soapenv:Body> \
+            <ws:resetServer > \
+              <serverId>$serverid</serverId>
+            </ws:resetServer> \
+          </soapenv:Body> \
+        </soapenv:Envelope>              \
+        "
+
+        echo "Sending reset signal to $hostname..." >> $logfile
+        curl --data "$XML" --header "Authorization: Basic $ENCODED" \
+             --header 'Content-Type: text/xml; charset=utf-8' $URL
+
+        rc=$?
+        # TODO: we need to actually sleep and then try to get VM status and check
+
+        if [ $rc -eq 0 ]
+        then
+                return 0
+        else
+                echo "`date`: VM reboot failed: `cat $outf`" >> $logfile
+                return 1
+        fi
+}
+
+
+case $1 in
+status)
+        pb_status
+        ;;
+on)
+        pb_on
+        ;;
+off)
+        pb_off
+        ;;
+reset)
+        pb_reset
+        ;;
+getconfignames)
+        for i in hostname; do
+                echo $i
+        done
+        ;;
+getinfo-devid)
+        echo "ProfitBricks API STONITH device"
+        ;;
+getinfo-devname)
+        echo "ProfitBricks API STONITH device"
+        ;;
+getinfo-devdescr)
+        echo "ProfitBricks host reboot/poweron/poweroff/status"
+        ;;
+getinfo-devurl)
+        echo "http://profitbricks.com/"
+        ;;
+getinfo-xml)
+        cat <<EOF
+<parameters>
+
+<parameter name="hostname" unique="1" required="1">
+<content type="string" />
+<shortdesc lang="en">
+Hostname
+</shortdesc>
+<longdesc lang="en">
+The hostname of the host to be managed by this STONITH device
+</longdesc>
+</parameter>
+
+</parameters>
+EOF
+        ;;
+*)
+        echo "Usage: $0 action hostname"
+        echo "       Action can be: status, on, off, reset"
+        echo "       Hostname needs to be on config file ($config_file)"
+        exit 1
+        ;;
+esac
