@@ -3,38 +3,16 @@
 # External STONITH module for ProfitBricks API
 
 
-#trap 'rm -f "$outf"' 0
-#outf=`mktemp` || {
-#       ha_log.sh err 'mktemp failed'
-#       exit 1
-#}
-
-# Redirecting stderr and stdout
-#exec 1>> /var/log/mhm/ha-nfs.log 2>&1
-logfile=/var/log/mhm/ha-nfs.log
-
-#scriptname=$(basename $0)
-#lock="/var/tmp/mhm/${scriptname}.pid"
-
-#exec 200>$lock
-#flock -n 200 || exit 1
-
-#pid=$$
-#echo $pid 1>&200
-
-
+logfile=/var/log/pb-stonith.log
 config_file=/etc/pb.conf
 
 # Source config file
 . $config_file
 
-
 hostname=`echo $2 | tr ',' ' '`
-
 
 get_server_id() {
         if [ x = "x$hostname" ]
-        #if [ -z "$hostname" ]
         then
                 echo "Usage: $0 action hostname" >> $logfile
                 echo "       Action can be: status, on, off, reset" >> $logfile
@@ -44,12 +22,7 @@ get_server_id() {
 
         serverid=${!hostname}
         # /bin/sh (non-bash) version: serverid=$(eval echo \$$hostname)
-        echo "PB VM id is: $serverid" >> $logfile
-
-        #echo "\$1: " $1
-        #echo "server id: " $serverid
-        #echo "config file: " $config_file
-        #echo "hostname: " $hostname
+        echo "ProfitBricks server ID is: $serverid" >> $logfile
 
         if [ -z "$serverid" ]
         then
